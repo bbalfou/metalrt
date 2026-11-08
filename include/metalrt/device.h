@@ -13,6 +13,13 @@ class Device {
     static void set_current(Device device);
     Capabilities capabilities() const;
     Buffer allocate(size_t bytes, StorageMode storage = StorageMode::Shared) const;
+    // Copies host pixels and completes a one-time upload before returning.
+    // Metal uses a Private, shader-read texture (not a linear buffer view).
+    // bytes_per_row=0 selects tightly packed rows; size includes the last row's pixels.
+    // Images are immutable: create another texture to change the pixels.
+    Texture2D upload_texture(TextureDescriptor descriptor, const void* pixels, size_t size,
+                             size_t bytes_per_row = 0) const;
+    Sampler sampler(SamplerDescriptor descriptor = {}) const;
     Kernel kernel(const std::string& source, const std::string& entry,
                   CpuKernel reference = {}) const;
     // Compile through the same backend and retain native GPU binaries between

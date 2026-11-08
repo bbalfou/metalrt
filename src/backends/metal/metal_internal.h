@@ -61,6 +61,12 @@ struct MetalAllocation final : BufferAllocation {
         return storage == StorageMode::Shared ? buffer.contents : nullptr;
     }
 };
+struct MetalTexture final : TextureAllocation {
+    id<MTLTexture> texture = nil;
+};
+struct MetalSampler final : SamplerState {
+    id<MTLSamplerState> sampler = nil;
+};
 struct MetalKernel final : KernelState {
     id<MTLFunction> function = nil;
     id<MTLComputePipelineState> direct = nil;
@@ -128,7 +134,12 @@ inline bool dynamic_dispatch(const ComputeCommand& command) {
     return command.indirect_groups || command.predicate || command.dispatch_status;
 }
 inline bool static_compute(const Command& command) {
-    return command.kind == Command::Kind::Compute && !dynamic_dispatch(command.compute);
+    // The ICB buffer table cannot directly bind texture/sampler arguments.
+    // Such commands use ordinary encoding between reusable ICB segments.
+    return command.kind == Command::Kind::Compute && !dynamic_dispatch(command.compute) &&
+           std::none_of(command.compute.arguments.begin(), command.compute.arguments.end(),
+                        [](const Argument& a) { return a.kind == Argument::Kind::Texture ||
+                                                      a.kind == Argument::Kind::Sampler; });
 }
 inline bool same_size(Size3 a, Size3 b) {
     return a.x == b.x && a.y == b.y && a.z == b.z;
@@ -148,7 +159,8 @@ inline bool same_compute(const ComputeCommand& a, const ComputeCommand& b) {
         const auto& x = a.arguments[i];
         const auto& y = b.arguments[i];
         if (x.index != y.index || x.kind != y.kind || x.access != y.access ||
-            !(x.resource == y.resource) || x.value != y.value ||
+            !(x.resource == y.resource) || !(x.image == y.image) ||
+            !(x.sampling == y.sampling) || x.value != y.value ||
             x.threadgroup_bytes != y.threadgroup_bytes)
             return false;
     }
@@ -207,6 +219,8 @@ struct PreparedArgument {
     uint32_t index = 0;
     Argument::Kind kind = Argument::Kind::Buffer;
     id<MTLBuffer> buffer = nil;
+    id<MTLTexture> texture = nil;
+    id<MTLSamplerState> sampler = nil;
     size_t offset = 0, threadgroup_bytes = 0;
     Access access = Access::Read;
 };

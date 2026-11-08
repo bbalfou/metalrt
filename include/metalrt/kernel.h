@@ -1,13 +1,16 @@
 #pragma once
 // Owned kernel handles and backend-independent command snapshots.
 #include <metalrt/buffer.h>
+#include <metalrt/texture.h>
 
 namespace metalrt {
 struct Argument {
-    enum class Kind { Buffer, Bytes, Threadgroup, NullBuffer };
+    enum class Kind { Buffer, Bytes, Threadgroup, NullBuffer, Texture, Sampler };
     uint32_t index = 0;
     Kind kind = Kind::Buffer;
     BufferView resource;
+    Texture2D image;
+    Sampler sampling;
     Access access = Access::Read;
     std::vector<uint8_t> value;
     size_t threadgroup_bytes = 0;
@@ -22,6 +25,9 @@ struct Argument {
         return bytes(index, &x, sizeof(T));
     }
     static Argument threadgroup(uint32_t index, size_t bytes);
+    // Texture, sampler, buffer and threadgroup slots are independent namespaces.
+    static Argument texture(uint32_t index, Texture2D image);
+    static Argument sampler(uint32_t index, Sampler sampling);
 };
 struct ComputeCommand;
 using CpuKernel = std::function<void(const ComputeCommand&)>;
@@ -77,6 +83,8 @@ struct ComputeCommand {
     // their hidden base and presence bit. Explicitly bound bases take precedence.
     std::vector<std::pair<uint32_t, uint32_t>> pointer_base_arguments;
     const Argument& argument(uint32_t index) const;
+    const Texture2D& texture(uint32_t index) const;
+    const Sampler& sampler(uint32_t index) const;
     void*
     reference_buffer(uint32_t index) const; // CPU backend callbacks only; includes Private storage.
     template <class T> T scalar(uint32_t index) const {

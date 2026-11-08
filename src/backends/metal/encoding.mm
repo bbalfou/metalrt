@@ -10,6 +10,10 @@ void MetalQueue::encode_compute(id<MTLComputeCommandEncoder> encoder, const Comp
     for (const auto& arg : prepared.arguments) {
         if (arg.kind == Argument::Kind::Threadgroup)
             [encoder setThreadgroupMemoryLength:arg.threadgroup_bytes atIndex:arg.index];
+        else if (arg.kind == Argument::Kind::Texture)
+            [encoder setTexture:arg.texture atIndex:arg.index];
+        else if (arg.kind == Argument::Kind::Sampler)
+            [encoder setSamplerState:arg.sampler atIndex:arg.index];
         else
             [encoder setBuffer:arg.buffer offset:arg.offset atIndex:arg.index];
     }
@@ -162,7 +166,7 @@ void MetalQueue::encode_direct(id<MTLCommandBuffer> cb, const PreparedSequence& 
         const size_t first = i;
         do {
             if (i > first && sequence.commands[i].compute.barrier_before)
-                [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
             encode_compute(encoder, sequence.commands[i].compute, sequence.compute[i]);
             ++i;
         } while (i < end && static_compute(sequence.commands[i]));

@@ -23,6 +23,10 @@ struct ReferenceBuffer final : BufferAllocation {
     ~ReferenceBuffer() override { ::operator delete(memory, std::align_val_t(256)); }
     void* contents() const override { return memory; }
 };
+struct ReferenceTexture final : TextureAllocation {
+    std::vector<uint8_t> pixels;
+    const uint8_t* reference_pixels() const override { return pixels.data(); }
+};
 struct ReferenceCompletion final : Completion {
     std::shared_future<void> future;
     explicit ReferenceCompletion(std::shared_future<void> f) : future(std::move(f)) {}
@@ -52,7 +56,10 @@ struct ReferencePlan final : Plan {
 };
 bool static_compute(const Command& command) {
     return command.kind == Command::Kind::Compute && !command.compute.indirect_groups &&
-           !command.compute.predicate && !command.compute.dispatch_status;
+           !command.compute.predicate && !command.compute.dispatch_status &&
+           std::none_of(command.compute.arguments.begin(), command.compute.arguments.end(),
+                        [](const Argument& a) { return a.kind == Argument::Kind::Texture ||
+                                                      a.kind == Argument::Kind::Sampler; });
 }
 std::vector<ReferenceSegment> segment_layout(const std::vector<Command>& commands) {
     std::vector<ReferenceSegment> result;
@@ -335,7 +342,8 @@ struct ReferenceQueue final : QueueBackend {
                     ++result.statistics.control_dispatches;
                 else
                     ++result.statistics.compute_dispatches;
-                if (!static_compute(command))
+                if (command.compute.indirect_groups || command.compute.predicate ||
+                    command.compute.dispatch_status)
                     ++result.statistics.control_dispatches;
             } else
                 ++result.statistics.blit_commands;
@@ -366,6 +374,24 @@ struct ReferenceDevice final : DeviceBackend {
     }
     std::shared_ptr<BufferAllocation> allocate(size_t n, StorageMode s) override {
         return std::make_shared<ReferenceBuffer>(n, s, this);
+    }
+    std::shared_ptr<TextureAllocation>
+    upload_texture(TextureDescriptor desc, const void* pixels, size_t stride) override {
+        auto result = std::make_shared<ReferenceTexture>();
+        result->descriptor = desc;
+        result->device_identity = this;
+        const auto row = checked_mul(desc.width, pixel_size(desc.format));
+        result->pixels.resize(checked_mul(row, desc.height));
+        for (size_t y = 0; y < desc.height; ++y)
+            std::memcpy(result->pixels.data() + y * row,
+                        static_cast<const uint8_t*>(pixels) + y * stride, row);
+        return result;
+    }
+    std::shared_ptr<SamplerState> make_sampler(SamplerDescriptor desc) override {
+        auto result = std::make_shared<SamplerState>();
+        result->descriptor = desc;
+        result->device_identity = this;
+        return result;
     }
     std::shared_ptr<KernelState> compile(const std::string&, const std::string& entry,
                                          CpuKernel cpu) override {

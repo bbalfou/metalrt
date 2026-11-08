@@ -40,6 +40,8 @@ class Graph::Update {
     Update& operator=(const Update&) = delete;
     Update& set_buffer(size_t command, uint32_t argument, BufferView buffer);
     Update& set_null_buffer(size_t command, uint32_t argument);
+    Update& set_texture(size_t command, uint32_t argument, Texture2D texture);
+    Update& set_sampler(size_t command, uint32_t argument, Sampler sampler);
     Update& set_bytes(size_t command, uint32_t argument, const void* bytes, size_t size);
     template <class T> Update& set_scalar(size_t command, uint32_t argument, const T& value) {
         static_assert(std::is_trivially_copyable<T>::value, "constant ABI must be trivial");

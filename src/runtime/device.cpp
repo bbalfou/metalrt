@@ -134,7 +134,8 @@ Kernel Device::kernel_file(const std::string& path, const std::string& entry, Cp
 DeviceStatistics Device::statistics() const {
     require(static_cast<bool>(*this), "empty device");
     return {impl_->buffer_allocations.load(), impl_->allocated_bytes.load(),
-            impl_->kernel_compilations.load()};
+            impl_->kernel_compilations.load(), impl_->texture_allocations.load(),
+            impl_->texture_uploaded_bytes.load(), impl_->sampler_allocations.load()};
 }
 KernelCacheStatistics Device::kernel_cache_statistics() const {
     require(static_cast<bool>(*this), "empty device");

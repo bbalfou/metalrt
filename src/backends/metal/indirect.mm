@@ -131,6 +131,11 @@ void MetalQueue::encode_indirect(id<MTLCommandBuffer> cb, const MetalPlan& plan,
             ++cursor;
             continue;
         }
+        if (!static_compute(commands[cursor])) {
+            encode_direct(cb, sequence, cursor, cursor + 1, scratch);
+            ++cursor;
+            continue;
+        }
         const auto& segment = plan.segments.at(segment_index++);
         id<MTLComputeCommandEncoder> encoder =
             [cb computeCommandEncoderWithDispatchType:MTLDispatchTypeSerial];

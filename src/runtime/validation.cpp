@@ -35,7 +35,8 @@ bool same_commands(const std::vector<Command>& a, const std::vector<Command>& b)
                 const auto& c = p.arguments[j];
                 const auto& d = q.arguments[j];
                 if (c.kind != d.kind || c.index != d.index || c.access != d.access ||
-                    !(c.resource == d.resource) || c.value != d.value ||
+                    !(c.resource == d.resource) || !(c.image == d.image) ||
+                    !(c.sampling == d.sampling) || c.value != d.value ||
                     c.threadgroup_bytes != d.threadgroup_bytes)
                     return false;
             }
@@ -99,14 +100,17 @@ void validate_command(const Command& c, const Device& d) {
         }
         require(!k.parallel_group || (!k.indirect_groups && !k.predicate && !k.control),
                 "parallel groups support independent fixed compute dispatches only");
-        std::vector<uint32_t> buffers, threadgroups;
+        std::vector<uint32_t> buffers, threadgroups, textures, samplers;
         const bool derived =
             k.optional_buffer_mask != UINT32_MAX || !k.pointer_base_arguments.empty();
         const auto materialized =
             derived ? detail::materialize_compute_arguments(k) : std::vector<Argument>{};
         for (const auto& a : derived ? materialized : k.arguments) {
-            require(a.index < 31, "Metal argument index must be below 31");
-            auto& used = a.kind == Argument::Kind::Threadgroup ? threadgroups : buffers;
+            require(a.index < (a.kind == Argument::Kind::Sampler ? 16u : 31u),
+                    "Metal argument index exceeds its portable slot limit");
+            auto& used = a.kind == Argument::Kind::Threadgroup ? threadgroups :
+                         a.kind == Argument::Kind::Texture ? textures :
+                         a.kind == Argument::Kind::Sampler ? samplers : buffers;
             require(std::find(used.begin(), used.end(), a.index) == used.end(),
                     "duplicate GPU argument index");
             used.push_back(a.index);
@@ -114,6 +118,15 @@ void validate_command(const Command& c, const Device& d) {
                 validate_buffer(a.resource, d);
                 require(!overlaps(k.dispatch_status, a.resource),
                         "dispatch status must not overlap payload arguments");
+            } else if (a.kind == Argument::Kind::Texture) {
+                require(static_cast<bool>(a.image), "empty texture binding");
+                require(a.image.implementation()->device_identity == d.implementation().get(),
+                        "texture and stream belong to different devices");
+                require(a.access == Access::Read, "uploaded images are read-only textures");
+            } else if (a.kind == Argument::Kind::Sampler) {
+                require(static_cast<bool>(a.sampling), "empty sampler binding");
+                require(a.sampling.implementation()->device_identity == d.implementation().get(),
+                        "sampler and stream belong to different devices");
             } else if (a.kind == Argument::Kind::Bytes)
                 require(!a.value.empty(), "empty constant argument");
             else if (a.kind == Argument::Kind::Threadgroup)

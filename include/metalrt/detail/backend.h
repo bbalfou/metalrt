@@ -20,6 +20,21 @@ struct BufferAllocation {
     virtual ~BufferAllocation() = default;
     virtual void* contents() const = 0;
 };
+struct TextureAllocation {
+    TextureDescriptor descriptor;
+    const void* device_identity = nullptr;
+    std::shared_ptr<DeviceBackend> device_owner;
+    virtual ~TextureAllocation() = default;
+    virtual const uint8_t* reference_pixels() const {
+        throw std::logic_error("texture pixels are only accessible on the Reference backend");
+    }
+};
+struct SamplerState {
+    SamplerDescriptor descriptor;
+    const void* device_identity = nullptr;
+    std::shared_ptr<DeviceBackend> device_owner;
+    virtual ~SamplerState() = default;
+};
 struct KernelState {
     std::string entry;
     const void* device_identity = nullptr;
@@ -102,11 +117,19 @@ struct QueueBackend {
 };
 struct DeviceBackend : std::enable_shared_from_this<DeviceBackend> {
     std::atomic<uint64_t> buffer_allocations{0}, allocated_bytes{0}, kernel_compilations{0};
+    std::atomic<uint64_t> texture_allocations{0}, texture_uploaded_bytes{0}, sampler_allocations{0};
     std::atomic<uint64_t> kernel_memory_hits{0}, source_compilations{0};
     std::atomic<uint64_t> archive_hits{0}, archive_misses{0}, archive_writes{0}, archive_errors{0};
     virtual ~DeviceBackend() = default;
     virtual Capabilities capabilities() const = 0;
     virtual std::shared_ptr<BufferAllocation> allocate(size_t bytes, StorageMode storage) = 0;
+    virtual std::shared_ptr<TextureAllocation>
+    upload_texture(TextureDescriptor, const void*, size_t) {
+        throw std::runtime_error("texture upload is unavailable on this backend");
+    }
+    virtual std::shared_ptr<SamplerState> make_sampler(SamplerDescriptor) {
+        throw std::runtime_error("samplers are unavailable on this backend");
+    }
     virtual std::shared_ptr<KernelState> compile(const std::string& source,
                                                  const std::string& entry, CpuKernel reference) = 0;
     virtual std::shared_ptr<KernelState> compile_cached(const std::string& source,

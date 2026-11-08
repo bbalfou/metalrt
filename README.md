@@ -140,12 +140,20 @@ not embed a path to this repository.
 | Change typed parameters while keeping graph bindings stable | [stable_parameters.cpp](examples/stable_parameters.cpp), [parameters.h](include/metalrt/parameters.h) |
 | Import native devices/buffers and borrow command buffers | [interop.h](include/metalrt/interop.h), [test_metal_interop.mm](tests/test_metal_interop.mm) |
 | Compare submission policies and completed GPU timing | [overhead_benchmark.cpp](examples/overhead_benchmark.cpp) |
+| Upload images, sample with hardware filtering, and feed tiny-metal-nn training | [image sampling and training](docs/image-sampling.md), [texture.h](include/metalrt/texture.h) |
 
 `Device::kernel_cached()` adds persistent Metal binary archives to the per-device
 memory cache. Cache failures fall back to compilation and are counted in cache
 statistics. Structured GPU loops record a bounded number of iterations; they
 are not unbounded device-side loops. Parallel groups validate declared buffer
 accesses, so access annotations must reflect what the shader actually does.
+
+`Device::upload_texture()` creates a retained, immutable 2D image in private GPU
+storage. `Argument::texture()` and `Argument::sampler()` bind ordinary MSL
+`texture2d<float>` and `sampler` parameters, with nearest/bilinear filtering and
+clamp/repeat addressing. Sampled results can flow directly into training buffers.
+The [image guide](docs/image-sampling.md) includes runnable sampling benchmarks,
+an optional real tiny-metal-nn training example, and measured M3 Max results.
 
 ## Code layout and API direction
 

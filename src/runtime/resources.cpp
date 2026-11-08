@@ -144,7 +144,9 @@ Argument Argument::threadgroup(uint32_t i, size_t n) {
 }
 const Argument& ComputeCommand::argument(uint32_t i) const {
     for (auto& a : arguments)
-        if (a.index == i && a.kind != Argument::Kind::Threadgroup)
+        if (a.index == i && (a.kind == Argument::Kind::Buffer ||
+                             a.kind == Argument::Kind::NullBuffer ||
+                             a.kind == Argument::Kind::Bytes))
             return a;
     throw std::out_of_range("kernel argument index is not bound");
 }
@@ -183,7 +185,8 @@ std::vector<Argument> detail::materialize_compute_arguments(const ComputeCommand
     }
     require(!(sources & derived), "pointer-base arguments cannot be chained");
     for (const auto& argument : arguments) {
-        if (argument.kind == Argument::Kind::Threadgroup)
+        if (argument.kind == Argument::Kind::Threadgroup ||
+            argument.kind == Argument::Kind::Texture || argument.kind == Argument::Kind::Sampler)
             continue;
         require(argument.index < 31, "GPU argument index must be below 31");
         require(!mask_enabled || argument.index != command.optional_buffer_mask,
@@ -197,13 +200,17 @@ std::vector<Argument> detail::materialize_compute_arguments(const ComputeCommand
         // that precede them. An explicit/default base remains caller-owned;
         // only absent bases follow source edits across graph versions.
         if (std::any_of(arguments.begin(), arguments.end(), [&](const Argument& argument) {
-                return argument.kind != Argument::Kind::Threadgroup &&
+                return (argument.kind == Argument::Kind::Buffer ||
+                        argument.kind == Argument::Kind::NullBuffer ||
+                        argument.kind == Argument::Kind::Bytes) &&
                        argument.index == mapping.second;
             }))
             continue;
         const auto source =
             std::find_if(arguments.begin(), arguments.end(), [&](const Argument& argument) {
-                return argument.kind != Argument::Kind::Threadgroup &&
+                return (argument.kind == Argument::Kind::Buffer ||
+                        argument.kind == Argument::Kind::NullBuffer ||
+                        argument.kind == Argument::Kind::Bytes) &&
                        argument.index == mapping.first;
             });
         require(source != arguments.end(), "pointer-base source slot is not bound");

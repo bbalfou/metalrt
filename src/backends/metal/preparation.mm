@@ -47,6 +47,16 @@ MetalQueue::prepare(const std::vector<Command>& commands,
             if (a.kind == Argument::Kind::Buffer) {
                 p.buffer = native_buffer(a.resource, identity_)->buffer;
                 p.offset = a.resource.offset;
+            } else if (a.kind == Argument::Kind::Texture) {
+                auto texture = std::dynamic_pointer_cast<MetalTexture>(a.image.implementation());
+                if (!texture || texture->device_identity != identity_)
+                    throw std::invalid_argument("texture belongs to another backend or device");
+                p.texture = texture->texture;
+            } else if (a.kind == Argument::Kind::Sampler) {
+                auto sampler = std::dynamic_pointer_cast<MetalSampler>(a.sampling.implementation());
+                if (!sampler || sampler->device_identity != identity_)
+                    throw std::invalid_argument("sampler belongs to another backend or device");
+                p.sampler = sampler->sampler;
             } else if (a.kind == Argument::Kind::Bytes) {
                 p.buffer = [device_ newBufferWithBytes:a.value.data()
                                                 length:a.value.size()

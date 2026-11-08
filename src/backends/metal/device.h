@@ -15,6 +15,9 @@ class MetalDevice final : public DeviceBackend {
                                                           std::shared_ptr<void> external_owner,
                                                           bool allow_untracked) override;
     std::shared_ptr<BufferAllocation> allocate(size_t bytes, StorageMode storage) override;
+    std::shared_ptr<TextureAllocation>
+    upload_texture(TextureDescriptor, const void*, size_t bytes_per_row) override;
+    std::shared_ptr<SamplerState> make_sampler(SamplerDescriptor) override;
     std::shared_ptr<KernelState> compile(const std::string& source, const std::string& entry,
                                          CpuKernel reference) override;
     std::shared_ptr<KernelState> compile_cached(const std::string& source, const std::string& entry,

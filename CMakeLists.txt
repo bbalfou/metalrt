@@ -10,6 +10,7 @@ option(METALRT_BUILD_TESTS "Build runtime correctness and lifetime tests" ON)
 option(METALRT_BUILD_EXAMPLES "Build standalone runtime examples" ON)
 option(METALRT_TEST_METAL "Register native Metal tests (requires a GPU)" ${APPLE})
 option(METALRT_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+set(METALRT_TINY_METAL_NN_SOURCE_DIR "" CACHE PATH "Optional tiny-metal-nn checkout for image training example")
 
 if(METALRT_ENABLE_METAL)
     if(NOT APPLE)
@@ -26,6 +27,7 @@ endif()
 find_package(Threads REQUIRED)
 add_library(metalrt STATIC
     src/runtime/resources.cpp
+    src/runtime/texture.cpp
     src/runtime/device.cpp
     src/runtime/completion.cpp
     src/runtime/ordering.cpp
@@ -56,6 +58,7 @@ if(METALRT_ENABLE_METAL)
     set(metalrt_metal_sources
         src/backends/metal/backend.mm
         src/backends/metal/device.mm
+        src/backends/metal/texture.mm
         src/backends/metal/compilation.mm
         src/backends/metal/cache.mm
         src/backends/metal/submission.mm
@@ -76,7 +79,7 @@ endif()
 # These are ordinary asset copies. No script converts MSL source into C++ or
 # generates a kernel implementation. Source files remain human-editable .metal.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")
-foreach(shader dependent_kernels runtime_tests file_dispatch graph_features gpu_control ring_pipeline stable_parameters)
+foreach(shader dependent_kernels runtime_tests file_dispatch graph_features gpu_control ring_pipeline stable_parameters texture_sampling image_training)
     configure_file("kernels/${shader}.metal" "shaders/${shader}.metal" COPYONLY)
 endforeach()
 
@@ -96,7 +99,7 @@ if(METALRT_BUILD_TESTS)
             set_tests_properties(metal_interop PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "runtime;metal;interop")
         endif()
     endif()
-    foreach(test runtime shader_file graph_features control ring scope_safety timing)
+    foreach(test runtime shader_file graph_features control ring scope_safety timing texture)
         add_executable(test_${test} "tests/test_${test}.cpp")
         target_link_libraries(test_${test} PRIVATE metalrt::metalrt)
         target_compile_definitions(test_${test} PRIVATE
@@ -141,6 +144,26 @@ if(METALRT_BUILD_TESTS)
 endif()
 
 if(METALRT_BUILD_EXAMPLES)
+    if(METALRT_ENABLE_METAL)
+        add_library(metalrt_example_image_io STATIC examples/image_io.mm)
+        target_link_libraries(metalrt_example_image_io PUBLIC metalrt::metalrt "-framework ImageIO" "-framework CoreGraphics")
+        target_compile_options(metalrt_example_image_io PRIVATE -fobjc-arc)
+        set_target_properties(metalrt_example_image_io PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED YES)
+        add_executable(image_sampling examples/image_sampling.cpp)
+        target_link_libraries(image_sampling PRIVATE metalrt_example_image_io)
+        target_compile_definitions(image_sampling PRIVATE METALRT_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
+        if(METALRT_TINY_METAL_NN_SOURCE_DIR)
+            if(NOT EXISTS "${METALRT_TINY_METAL_NN_SOURCE_DIR}/include/tiny-metal-nn/trainer.h")
+                message(FATAL_ERROR "METALRT_TINY_METAL_NN_SOURCE_DIR must point to a tiny-metal-nn checkout")
+            endif()
+            # tiny-metal-nn reuses this build's metalrt target. Its bundled
+            # runtime and the source checkout are left untouched.
+            add_subdirectory("${METALRT_TINY_METAL_NN_SOURCE_DIR}" "tiny-metal-nn" EXCLUDE_FROM_ALL)
+            add_executable(image_training examples/image_training.cpp)
+            target_link_libraries(image_training PRIVATE metalrt_example_image_io tiny-metal-nn::tiny-metal-nn)
+            target_compile_definitions(image_training PRIVATE METALRT_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
+        endif()
+    endif()
     foreach(example dependent_kernels replay_updates parallel_branches gpu_control stream_events overhead_benchmark ring_pipeline stable_parameters)
         add_executable(${example} "examples/${example}.cpp")
         target_link_libraries(${example} PRIVATE metalrt::metalrt)
@@ -168,6 +191,7 @@ install(TARGETS metalrt EXPORT metalrt-targets ARCHIVE DESTINATION ${CMAKE_INSTA
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/metalrt)
 install(FILES docs/compatibility.md DESTINATION ${CMAKE_INSTALL_DATADIR}/metalrt/docs)
+install(FILES docs/image-sampling.md DESTINATION ${CMAKE_INSTALL_DATADIR}/metalrt/docs)
 install(EXPORT metalrt-targets NAMESPACE metalrt:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/metalrt)
 configure_package_config_file(cmake/metalrt-config.cmake.in
     "${CMAKE_CURRENT_BINARY_DIR}/metalrt-config.cmake"

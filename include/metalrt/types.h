@@ -56,6 +56,7 @@ struct GpuTiming {
 };
 struct DeviceStatistics {
     uint64_t buffer_allocations = 0, allocated_bytes = 0, kernel_compilations = 0;
+    uint64_t texture_allocations = 0, texture_uploaded_bytes = 0, sampler_allocations = 0;
 };
 // Memory hits count returned kernel handles; archive hits/misses count pipeline
 // lookups. Source compilation is separate: Metal still needs a library/function
@@ -84,6 +85,8 @@ struct Capabilities {
 };
 namespace detail {
 struct BufferAllocation;
+struct TextureAllocation;
+struct SamplerState;
 struct KernelState;
 struct DeviceBackend;
 struct QueueBackend;

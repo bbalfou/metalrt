@@ -49,6 +49,16 @@ Graph::Update& Graph::Update::set_null_buffer(size_t command, uint32_t index) {
     throw std::invalid_argument(
         "graph update argument index or type does not match the recorded buffer");
 }
+Graph::Update& Graph::Update::set_texture(size_t command, uint32_t index, Texture2D texture) {
+    mutable_argument(compute_node(commands_, command), index, Argument::Kind::Texture).image =
+        std::move(texture);
+    return *this;
+}
+Graph::Update& Graph::Update::set_sampler(size_t command, uint32_t index, Sampler sampler) {
+    mutable_argument(compute_node(commands_, command), index, Argument::Kind::Sampler).sampling =
+        std::move(sampler);
+    return *this;
+}
 Graph::Update& Graph::Update::set_bytes(size_t command, uint32_t index, const void* bytes,
                                         size_t size) {
     auto& argument =
