@@ -39,14 +39,35 @@ struct Statistics {
     uint64_t cpu_submit_nanoseconds = 0, stream_wait_calls = 0, cpu_wait_nanoseconds = 0;
     Statistics& operator+=(const Statistics& other);
 };
+enum class GpuCounterSet { None, Statistic, StageUtilization };
+struct GpuTimingOptions {
+    bool sample_kernels = false;
+    GpuCounterSet counters = GpuCounterSet::None;
+};
+struct GpuCounterValue {
+    std::string name;
+    uint64_t begin = UINT64_MAX, end = UINT64_MAX;
+    bool valid() const { return begin != UINT64_MAX && end != UINT64_MAX; }
+};
+struct KernelTiming {
+    std::string kernel;
+    size_t command_index = 0; // Index within its submitted batch/graph.
+    bool valid = false;
+    double seconds = 0;
+    uint64_t gpu_start = UINT64_MAX, gpu_end = UINT64_MAX; // Raw GPU clock.
+    std::vector<GpuCounterValue> counters;
+};
 // Completed Metal command-buffer timestamps, in seconds on the host timebase.
-// The sum is a sum of command-buffer intervals, not exclusive ALU busy time.
-// The span also includes gaps between buffers. Neither is CPU submission time.
+// The sum counts overlap; the span includes gaps. Neither is CPU submission time.
 struct GpuTiming {
     bool supported = false;
     uint64_t command_buffers = 0, timed_command_buffers = 0;
     double command_buffer_seconds = 0;
     double first_gpu_start_seconds = 0, last_gpu_end_seconds = 0;
+    // Union of completed command-buffer intervals: overlap counted once.
+    // This measures occupied intervals, not exclusive shader/ALU busy time.
+    double occupied_seconds = 0;
+    std::vector<KernelTiming> kernels;
     bool valid() const {
         return supported && command_buffers > 0 && timed_command_buffers == command_buffers;
     }
@@ -59,14 +80,38 @@ struct DeviceStatistics {
     uint64_t texture_allocations = 0, texture_uploaded_bytes = 0, sampler_allocations = 0;
 };
 // Memory hits count returned kernel handles; archive hits/misses count pipeline
-// lookups. Source compilation is separate: Metal still needs a library/function
-// to describe a pipeline loaded from a persistent binary archive.
+// lookups. Source compilation is separate. Source-based archive lookups still
+// need a library/function; kernel_metallib() and pipeline import avoid MSL compilation.
 struct KernelCacheStatistics {
     uint64_t memory_hits = 0, source_compilations = 0;
     uint64_t archive_hits = 0, archive_misses = 0, archive_writes = 0, archive_errors = 0;
 };
+// Scalar Metal function constants, addressed by [[function_constant(index)]].
+struct FunctionConstant {
+    enum class Type { Bool, Int32, UInt32, Float32 };
+    uint32_t index = 0;
+    Type type = Type::UInt32;
+    std::vector<uint8_t> value;
+    template <class T> static FunctionConstant scalar(uint32_t index, T value) {
+        static_assert(std::is_same<T, bool>::value || std::is_same<T, int32_t>::value ||
+                          std::is_same<T, uint32_t>::value || std::is_same<T, float>::value,
+                      "function constants support bool, int32_t, uint32_t and float");
+        FunctionConstant result;
+        result.index = index;
+        if constexpr (std::is_same<T, bool>::value)
+            result.type = Type::Bool;
+        else if constexpr (std::is_same<T, int32_t>::value)
+            result.type = Type::Int32;
+        else if constexpr (std::is_same<T, float>::value)
+            result.type = Type::Float32;
+        result.value.resize(sizeof(T));
+        std::memcpy(result.value.data(), &value, sizeof(T));
+        return result;
+    }
+};
 struct KernelCompileOptions {
     bool fast_math = false;
+    std::vector<FunctionConstant> constants;
 };
 struct Capabilities {
     BackendKind backend = BackendKind::Reference;
@@ -82,6 +127,7 @@ struct Capabilities {
     // that many threads. Native submission additionally checks pipeline limits.
     size_t max_threads_per_threadgroup = 0;
     size_t max_threadgroup_memory_bytes = 0;
+    bool kernel_timestamps = false, statistic_counters = false, utilization_counters = false;
 };
 namespace detail {
 struct BufferAllocation;

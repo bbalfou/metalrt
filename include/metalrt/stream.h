@@ -46,6 +46,11 @@ class Stream {
     // active; the initiating thread owns the stream until end_gpu_timing().
     // Reference execution returns supported=false, never fabricated GPU time.
     void begin_gpu_timing();
+    // Counter sampling requires advertised device support. Sampled kernels use
+    // isolated serial compute passes (including when replay policy is Indirect),
+    // changing overlap and adding instrumentation overhead. Dynamic dispatch
+    // samples cover the payload, excluding its dispatch preparation kernel.
+    void begin_gpu_timing(const GpuTimingOptions& options);
     GpuTiming end_gpu_timing();
     EventPoint signal(TimelineEvent& event);
     Ticket wait(const EventPoint& point); // Encodes a GPU wait, never a CPU wait.

@@ -139,12 +139,25 @@ not embed a path to this repository.
 | Reuse host/GPU ring slots with tracked completion | [ring_pipeline.cpp](examples/ring_pipeline.cpp), [ring.h](include/metalrt/ring.h) |
 | Change typed parameters while keeping graph bindings stable | [stable_parameters.cpp](examples/stable_parameters.cpp), [parameters.h](include/metalrt/parameters.h) |
 | Import native devices/buffers and borrow command buffers | [interop.h](include/metalrt/interop.h), [test_metal_interop.mm](tests/test_metal_interop.mm) |
+| Specialize a common function, load offline libraries, sample kernel timestamps/counters | [native kernel guide](docs/native-kernels.md), [specialized_kernels.cpp](examples/specialized_kernels.cpp) |
+| Retain an existing native compute pipeline | [imported_pipeline.mm](examples/imported_pipeline.mm) |
 | Compare submission policies and completed GPU timing | [overhead_benchmark.cpp](examples/overhead_benchmark.cpp) |
 | Upload images, sample with hardware filtering, and feed tiny-metal-nn training | [image sampling and training](docs/image-sampling.md), [texture.h](include/metalrt/texture.h) |
 
 `Device::kernel_cached()` adds persistent Metal binary archives to the per-device
 memory cache. Cache failures fall back to compilation and are counted in cache
-statistics. Structured GPU loops record a bounded number of iterations; they
+statistics. Source-based archive hits still need a Metal library; use
+`kernel_metallib()` to load offline-compiled code or `import_metal_pipeline()`
+to retain a pipeline created by an external owner. `KernelCompileOptions::constants`
+specializes a shared library function with Metal function constants.
+
+`begin_gpu_timing(options)` optionally samples individual compute passes and
+hardware counters when the device advertises support. `GpuTiming::occupied_seconds`
+counts overlapping command-buffer intervals once; `command_buffer_seconds`
+retains its original sum semantics. See the [native kernel guide](docs/native-kernels.md)
+for profiling overhead and counter availability.
+
+Structured GPU loops record a bounded number of iterations; they
 are not unbounded device-side loops. Parallel groups validate declared buffer
 accesses, so access annotations must reflect what the shader actually does.
 

@@ -61,8 +61,16 @@ class MetalQueue final : public QueueBackend {
                                const PreparedCommand& prepared, id<MTLBuffer> groups = nil,
                                size_t offset = 0);
     void encode_transfer(id<MTLCommandBuffer> cb, const Command& command) const;
+    std::shared_ptr<KernelSample> make_sample(id<MTLCommandBuffer>, const ComputeCommand&, size_t,
+                                              const GpuTimingOptions&) const;
+    id<MTLComputeCommandEncoder> sampled_encoder(id<MTLCommandBuffer>,
+                                                 const std::shared_ptr<KernelSample>&) const;
+    void encode_profiled(id<MTLCommandBuffer>, const PreparedSequence&, size_t, size_t,
+                         const std::shared_ptr<DispatchScratch>&, MetalCompletion&,
+                         const GpuTimingOptions&) const;
     void encode_dynamic(id<MTLCommandBuffer> cb, const PreparedSequence& sequence, size_t index,
-                        const std::shared_ptr<DispatchScratch>& scratch) const;
+                        const std::shared_ptr<DispatchScratch>& scratch,
+                        const std::shared_ptr<KernelSample>& sample = {}) const;
     void encode_direct(id<MTLCommandBuffer> cb, const PreparedSequence& sequence, size_t begin,
                        size_t end, const std::shared_ptr<DispatchScratch>& scratch) const;
     static std::vector<IndirectSegment> segment_layout(const PreparedSequence& sequence);

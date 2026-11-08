@@ -19,8 +19,8 @@ NativeArchive MetalDevice::archive_locked(const std::string& source, const std::
         const auto append = [&](const std::string& field) {
             identity += std::to_string(field.size()) + ":" + field;
         };
-        append("metalrt-binary-archive-v1;msl=platform-default;direct=1");
-        append(options.fast_math ? "fast-math=1" : "fast-math=0");
+        append("metalrt-binary-archive-v2;msl=platform-default;direct=1");
+        append(compile_options_key(options));
         append(capabilities_.indirect_compute ? "indirect=1" : "indirect=0");
         append(std::to_string(device_.registryID));
         append(capabilities_.name);

@@ -1,4 +1,6 @@
 #pragma once
+#include <metalrt/types.h>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -8,6 +10,40 @@
 
 namespace metalrt {
 namespace detail {
+// Canonicalize and validate public option data before using it in any cache.
+inline KernelCompileOptions validated_compile_options(KernelCompileOptions options) {
+    std::sort(options.constants.begin(), options.constants.end(),
+              [](const auto& a, const auto& b) { return a.index < b.index; });
+    uint32_t previous = 0;
+    bool first = true;
+    for (const auto& c : options.constants) {
+        const bool boolean = c.type == FunctionConstant::Type::Bool;
+        if (c.type != FunctionConstant::Type::Bool && c.type != FunctionConstant::Type::Int32 &&
+            c.type != FunctionConstant::Type::UInt32 && c.type != FunctionConstant::Type::Float32)
+            throw std::invalid_argument("unknown function constant type");
+        if (c.index > 65535 || c.value.size() != (boolean ? sizeof(bool) : 4) ||
+            (!first && c.index == previous))
+            throw std::invalid_argument("invalid or duplicate function constant");
+        if (boolean && c.value[0] > 1)
+            throw std::invalid_argument("invalid boolean function constant");
+        previous = c.index;
+        first = false;
+    }
+    return options;
+}
+inline std::string compile_options_key(const KernelCompileOptions& options) {
+    std::string key = options.fast_math ? "fast=1;" : "fast=0;";
+    for (const auto& c : options.constants) {
+        key += std::to_string(c.index) + ":" + std::to_string(static_cast<int>(c.type)) + ":";
+        for (auto byte : c.value) {
+            constexpr char hex[] = "0123456789abcdef";
+            key += hex[byte >> 4];
+            key += hex[byte & 15];
+        }
+        key += ";";
+    }
+    return key;
+}
 // Stable SHA-256 cache names, independent of std::hash implementation, process,
 // host endianness and C++ runtime. Metal additionally verifies that a loaded
 // archive contains the exact requested pipeline descriptor and function.

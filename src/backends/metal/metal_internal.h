@@ -138,8 +138,10 @@ inline bool static_compute(const Command& command) {
     // Such commands use ordinary encoding between reusable ICB segments.
     return command.kind == Command::Kind::Compute && !dynamic_dispatch(command.compute) &&
            std::none_of(command.compute.arguments.begin(), command.compute.arguments.end(),
-                        [](const Argument& a) { return a.kind == Argument::Kind::Texture ||
-                                                      a.kind == Argument::Kind::Sampler; });
+                        [](const Argument& a) {
+                            return a.kind == Argument::Kind::Texture ||
+                                   a.kind == Argument::Kind::Sampler;
+                        });
 }
 inline bool same_size(Size3 a, Size3 b) {
     return a.x == b.x && a.y == b.y && a.z == b.z;
@@ -159,19 +161,79 @@ inline bool same_compute(const ComputeCommand& a, const ComputeCommand& b) {
         const auto& x = a.arguments[i];
         const auto& y = b.arguments[i];
         if (x.index != y.index || x.kind != y.kind || x.access != y.access ||
-            !(x.resource == y.resource) || !(x.image == y.image) ||
-            !(x.sampling == y.sampling) || x.value != y.value ||
-            x.threadgroup_bytes != y.threadgroup_bytes)
+            !(x.resource == y.resource) || !(x.image == y.image) || !(x.sampling == y.sampling) ||
+            x.value != y.value || x.threadgroup_bytes != y.threadgroup_bytes)
             return false;
     }
     return true;
 }
+
+struct KernelSample {
+    id<MTLCounterSampleBuffer> timestamps = nil, counters = nil;
+    id<MTLCommandBuffer> command_buffer = nil;
+    KernelTiming result;
+    GpuCounterSet counter_set = GpuCounterSet::None;
+    MTLTimestamp cpu_before = 0, gpu_before = 0;
+    void collect(TimingState& timing) {
+        if (command_buffer.status == MTLCommandBufferStatusCompleted) {
+            MTLTimestamp cpu_after = 0, gpu_after = 0;
+            [timestamps.device sampleTimestamps:&cpu_after gpuTimestamp:&gpu_after];
+            NSData* data = [timestamps resolveCounterRange:NSMakeRange(0, 2)];
+            if (data.length == 2 * sizeof(MTLCounterResultTimestamp)) {
+                MTLCounterResultTimestamp values[2];
+                std::memcpy(values, data.bytes, sizeof(values));
+                result.gpu_start = values[0].timestamp;
+                result.gpu_end = values[1].timestamp;
+                result.valid = result.gpu_start != MTLCounterErrorValue &&
+                               result.gpu_end != MTLCounterErrorValue &&
+                               result.gpu_end >= result.gpu_start && gpu_after > gpu_before &&
+                               cpu_after > cpu_before;
+                if (result.valid)
+                    result.seconds =
+                        double(result.gpu_end - result.gpu_start) *
+                        (double(cpu_after - cpu_before) / double(gpu_after - gpu_before)) * 1e-9;
+            }
+            if (counters) {
+                NSData* values = [counters resolveCounterRange:NSMakeRange(0, 2)];
+                const std::vector<std::string> names =
+                    counter_set == GpuCounterSet::Statistic
+                        ? std::vector<std::string>{"tessellationInputPatches",
+                                                   "vertexInvocations",
+                                                   "postTessellationVertexInvocations",
+                                                   "clipperInvocations",
+                                                   "clipperPrimitivesOut",
+                                                   "fragmentInvocations",
+                                                   "fragmentsPassed",
+                                                   "computeKernelInvocations"}
+                        : std::vector<std::string>{
+                              "totalCycles",        "vertexCycles",
+                              "tessellationCycles", "postTessellationVertexCycles",
+                              "fragmentCycles",     "renderTargetCycles"};
+                const size_t size = names.size() * sizeof(uint64_t);
+                for (size_t i = 0; i < names.size(); ++i) {
+                    GpuCounterValue value;
+                    value.name = names[i];
+                    if (values.length == 2 * size) {
+                        std::memcpy(&value.begin, static_cast<const uint8_t*>(values.bytes) + i * 8,
+                                    8);
+                        std::memcpy(&value.end,
+                                    static_cast<const uint8_t*>(values.bytes) + size + i * 8, 8);
+                    }
+                    result.counters.push_back(std::move(value));
+                }
+            }
+        }
+        std::lock_guard<std::mutex> lock(timing.mutex);
+        timing.result.kernels.push_back(std::move(result));
+    }
+};
 
 struct MetalCompletion final : Completion {
     std::vector<CommandBufferHolder> buffers;
     std::vector<EventPoint> dependencies;
     std::shared_ptr<TimingState> timing;
     std::once_flag timing_collected;
+    std::vector<std::shared_ptr<KernelSample>> samples;
     bool externally_managed = false;
     bool append_dependencies(std::vector<Ticket>& output, bool) override {
         for (const auto& point : dependencies)
@@ -200,6 +262,8 @@ struct MetalCompletion final : Completion {
                     for (const auto& holder : buffers)
                         timing->record(holder.buffer.GPUStartTime, holder.buffer.GPUEndTime,
                                        holder.buffer.status == MTLCommandBufferStatusCompleted);
+                    for (const auto& sample : samples)
+                        sample->collect(*timing);
                 });
             if (!first_error.empty())
                 throw std::runtime_error("Metal command buffer failed: " + first_error);

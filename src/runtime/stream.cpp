@@ -354,7 +354,23 @@ void Stream::reset_statistics() {
     state_->stats = {};
 }
 void Stream::begin_gpu_timing() {
+    begin_gpu_timing(GpuTimingOptions{});
+}
+void Stream::begin_gpu_timing(const GpuTimingOptions& options) {
+    const auto capabilities = state_->device.capabilities();
+    require(options.counters == GpuCounterSet::None ||
+                options.counters == GpuCounterSet::Statistic ||
+                options.counters == GpuCounterSet::StageUtilization,
+            "unknown GPU counter set");
+    require(options.sample_kernels || options.counters == GpuCounterSet::None,
+            "hardware counters require kernel sampling");
+    if (options.sample_kernels && !capabilities.kernel_timestamps)
+        throw std::runtime_error("kernel timestamp sampling is unavailable on this device");
+    if ((options.counters == GpuCounterSet::Statistic && !capabilities.statistic_counters) ||
+        (options.counters == GpuCounterSet::StageUtilization && !capabilities.utilization_counters))
+        throw std::runtime_error("requested GPU counters are unavailable on this device");
     auto timing = std::make_shared<detail::TimingState>();
+    timing->options = options;
     timing->result.supported = state_->device.capabilities().backend == BackendKind::Metal;
     {
         std::lock_guard<std::recursive_mutex> order(state_->domain->mutex);

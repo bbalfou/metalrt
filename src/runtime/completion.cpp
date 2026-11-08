@@ -30,12 +30,26 @@ void detail::TimingState::record(double begin, double end, bool successful) {
         result.first_gpu_start_seconds = std::min(result.first_gpu_start_seconds, begin);
         result.last_gpu_end_seconds = std::max(result.last_gpu_end_seconds, end);
     }
+    intervals.emplace_back(begin, end);
     ++result.timed_command_buffers;
     result.command_buffer_seconds += end - begin;
 }
 GpuTiming detail::TimingState::snapshot() const {
     std::lock_guard<std::mutex> lock(mutex);
-    return result;
+    auto snapshot = result;
+    auto sorted = intervals;
+    std::sort(sorted.begin(), sorted.end());
+    double begin = 0, end = 0;
+    for (const auto& interval : sorted) {
+        if (interval.first > end) {
+            snapshot.occupied_seconds += end - begin;
+            begin = interval.first;
+            end = interval.second;
+        } else
+            end = std::max(end, interval.second);
+    }
+    snapshot.occupied_seconds += end - begin;
+    return snapshot;
 }
 TimelineEvent::TimelineEvent(Device device) {
     require(static_cast<bool>(device), "empty event device");

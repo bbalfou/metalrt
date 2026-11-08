@@ -22,6 +22,13 @@ class Device {
     Sampler sampler(SamplerDescriptor descriptor = {}) const;
     Kernel kernel(const std::string& source, const std::string& entry,
                   CpuKernel reference = {}) const;
+    Kernel kernel(const std::string& source, const std::string& entry,
+                  const KernelCompileOptions& options, CpuKernel reference = {}) const;
+    // Load an offline-compiled Metal library; never compiles MSL source.
+    // Reference execution uses the explicit callback, as for kernel().
+    Kernel kernel_metallib(const std::string& path, const std::string& entry,
+                           const KernelCompileOptions& options = {},
+                           CpuKernel reference = {}) const;
     // Compile through the same backend and retain native GPU binaries between
     // processes. An empty directory disables persistent caching. Cache errors
     // fall back to ordinary compilation and are observable in the statistics.
@@ -32,6 +39,8 @@ class Device {
                          CpuKernel reference = {}) const;
     Kernel kernel_file(const std::string& path, const std::string& entry,
                        CpuKernel reference = {}) const;
+    Kernel kernel_file(const std::string& path, const std::string& entry,
+                       const KernelCompileOptions& options, CpuKernel reference = {}) const;
     DeviceStatistics statistics() const;
     KernelCacheStatistics kernel_cache_statistics() const;
     // Releases only cache ownership. Recorded/in-flight commands retain their

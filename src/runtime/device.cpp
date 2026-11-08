@@ -1,5 +1,6 @@
 // Device selection, kernel loading, caching, and native resource import.
 #include "runtime_internal.h"
+#include <metalrt/detail/cache_key.h>
 
 namespace metalrt {
 namespace {
@@ -114,11 +115,42 @@ Kernel Device::kernel_cached(const std::string& source, const std::string& entry
                              const KernelCompileOptions& options, CpuKernel cpu) const {
     require(static_cast<bool>(*this), "empty device");
     require(!entry.empty(), "kernel entry is empty");
-    return Kernel{
-        impl_->compile_cached_with_options(source, entry, cache_directory, options, std::move(cpu)),
-        impl_};
+    return Kernel{impl_->compile_cached_with_options(source, entry, cache_directory,
+                                                     detail::validated_compile_options(options),
+                                                     std::move(cpu)),
+                  impl_};
+}
+Kernel Device::kernel(const std::string& source, const std::string& entry,
+                      const KernelCompileOptions& options, CpuKernel cpu) const {
+    return kernel_cached(source, entry, {}, options, std::move(cpu));
+}
+Kernel Device::kernel_metallib(const std::string& path, const std::string& entry,
+                               const KernelCompileOptions& options, CpuKernel cpu) const {
+    require(static_cast<bool>(*this), "empty device");
+    require(!entry.empty(), "kernel entry is empty");
+    auto validated = detail::validated_compile_options(options);
+    if (!std::filesystem::is_regular_file(path))
+        throw std::invalid_argument("metallib path is not a regular file: " + path);
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+        throw std::runtime_error("cannot open metallib: " + path);
+    std::string bytes{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+    if (file.bad() || bytes.empty())
+        throw std::runtime_error("cannot read metallib: " + path);
+    return Kernel{impl_->load_metallib(bytes, entry, validated, std::move(cpu)), impl_};
+}
+Kernel import_metal_pipeline(Device device, void* direct, const std::string& name, void* indirect) {
+    require(static_cast<bool>(device), "empty device");
+    require(direct != nullptr, "cannot import a null Metal pipeline");
+    require(!name.empty(), "kernel name is empty");
+    return Kernel{device.implementation()->import_metal_pipeline(direct, name, indirect),
+                  device.implementation()};
 }
 Kernel Device::kernel_file(const std::string& path, const std::string& entry, CpuKernel cpu) const {
+    return kernel_file(path, entry, KernelCompileOptions{}, std::move(cpu));
+}
+Kernel Device::kernel_file(const std::string& path, const std::string& entry,
+                           const KernelCompileOptions& options, CpuKernel cpu) const {
     if (!std::filesystem::is_regular_file(path))
         throw std::invalid_argument("shader path is not a regular file: " + path);
     std::ifstream file(path, std::ios::binary);
@@ -129,12 +161,12 @@ Kernel Device::kernel_file(const std::string& path, const std::string& entry, Cp
         throw std::runtime_error("cannot read shader file: " + path);
     if (source.empty())
         throw std::invalid_argument("shader file is empty: " + path);
-    return kernel(source, entry, std::move(cpu));
+    return kernel(source, entry, options, std::move(cpu));
 }
 DeviceStatistics Device::statistics() const {
     require(static_cast<bool>(*this), "empty device");
-    return {impl_->buffer_allocations.load(), impl_->allocated_bytes.load(),
-            impl_->kernel_compilations.load(), impl_->texture_allocations.load(),
+    return {impl_->buffer_allocations.load(),     impl_->allocated_bytes.load(),
+            impl_->kernel_compilations.load(),    impl_->texture_allocations.load(),
             impl_->texture_uploaded_bytes.load(), impl_->sampler_allocations.load()};
 }
 KernelCacheStatistics Device::kernel_cache_statistics() const {

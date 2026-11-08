@@ -83,8 +83,8 @@ void MetalQueue::encode_transfer(id<MTLCommandBuffer> cb, const Command& command
 }
 
 void MetalQueue::encode_dynamic(id<MTLCommandBuffer> cb, const PreparedSequence& sequence,
-                                size_t index,
-                                const std::shared_ptr<DispatchScratch>& scratch) const {
+                                size_t index, const std::shared_ptr<DispatchScratch>& scratch,
+                                const std::shared_ptr<KernelSample>& sample) const {
     const auto& command = sequence.commands[index].compute;
     const auto& prepared = sequence.compute[index];
     const size_t offset = sequence.scratch_offsets[index];
@@ -133,12 +133,90 @@ void MetalQueue::encode_dynamic(id<MTLCommandBuffer> cb, const PreparedSequence&
     // pass. This boundary orders the GPU preparation kernel and the payload,
     // including on older Metal devices; there is no CPU readback or wait.
     id<MTLComputeCommandEncoder> payload =
-        [cb computeCommandEncoderWithDispatchType:MTLDispatchTypeSerial];
+        sample ? sampled_encoder(cb, sample)
+               : [cb computeCommandEncoderWithDispatchType:MTLDispatchTypeSerial];
     if (!payload)
         metal_error("GPU-sized dispatch encoder");
     begin_encoder(payload);
     encode_compute(payload, command, prepared, scratch->buffer, offset);
     end_encoder(payload);
+}
+
+std::shared_ptr<KernelSample> MetalQueue::make_sample(id<MTLCommandBuffer> cb,
+                                                      const ComputeCommand& command, size_t index,
+                                                      const GpuTimingOptions& options) const {
+    auto sample = std::make_shared<KernelSample>();
+    sample->result.kernel = command.kernel.name();
+    sample->result.command_index = index;
+    sample->counter_set = options.counters;
+    sample->command_buffer = cb;
+    const auto make = [&](NSString* name) -> id<MTLCounterSampleBuffer> {
+        MTLCounterSampleBufferDescriptor* descriptor = [MTLCounterSampleBufferDescriptor new];
+        for (id<MTLCounterSet> set in device_.counterSets)
+            if ([set.name isEqualToString:name])
+                descriptor.counterSet = set;
+        if (!descriptor.counterSet)
+            throw std::runtime_error("GPU counter set unavailable");
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.sampleCount = 2;
+        NSError* error = nil;
+        auto buffer = [device_ newCounterSampleBufferWithDescriptor:descriptor error:&error];
+        if (!buffer)
+            metal_error("allocating GPU counter samples", error);
+        return buffer;
+    };
+    sample->timestamps = make(MTLCommonCounterSetTimestamp);
+    if (options.counters != GpuCounterSet::None)
+        sample->counters = make(options.counters == GpuCounterSet::Statistic
+                                    ? MTLCommonCounterSetStatistic
+                                    : MTLCommonCounterSetStageUtilization);
+    [device_ sampleTimestamps:&sample->cpu_before gpuTimestamp:&sample->gpu_before];
+    // Borrowed buffers may use unretained references. Retain samples through GPU completion.
+    // Capture just the buffers, avoiding a command-buffer/handler ownership cycle.
+    id<MTLCounterSampleBuffer> timestamps = sample->timestamps, counters = sample->counters;
+    [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+      (void)timestamps;
+      (void)counters;
+    }];
+    return sample;
+}
+id<MTLComputeCommandEncoder>
+MetalQueue::sampled_encoder(id<MTLCommandBuffer> cb,
+                            const std::shared_ptr<KernelSample>& sample) const {
+    MTLComputePassDescriptor* descriptor = [MTLComputePassDescriptor new];
+    descriptor.dispatchType = MTLDispatchTypeSerial;
+    for (NSUInteger i = 0; i < (sample->counters ? 2u : 1u); ++i) {
+        auto attachment = descriptor.sampleBufferAttachments[i];
+        attachment.sampleBuffer = i ? sample->counters : sample->timestamps;
+        attachment.startOfEncoderSampleIndex = 0;
+        attachment.endOfEncoderSampleIndex = 1;
+    }
+    auto encoder = [cb computeCommandEncoderWithDescriptor:descriptor];
+    if (!encoder)
+        metal_error("sampled compute encoder");
+    return encoder;
+}
+void MetalQueue::encode_profiled(id<MTLCommandBuffer> cb, const PreparedSequence& sequence,
+                                 size_t begin, size_t end,
+                                 const std::shared_ptr<DispatchScratch>& scratch,
+                                 MetalCompletion& completion,
+                                 const GpuTimingOptions& options) const {
+    for (size_t i = begin; i < end; ++i) {
+        if (sequence.commands[i].kind != Command::Kind::Compute) {
+            encode_transfer(cb, sequence.commands[i]);
+            continue;
+        }
+        auto sample = make_sample(cb, sequence.commands[i].compute, i, options);
+        completion.samples.push_back(sample);
+        if (dynamic_dispatch(sequence.commands[i].compute))
+            encode_dynamic(cb, sequence, i, scratch, sample);
+        else {
+            auto encoder = sampled_encoder(cb, sample);
+            begin_encoder(encoder);
+            encode_compute(encoder, sequence.commands[i].compute, sequence.compute[i]);
+            end_encoder(encoder);
+        }
+    }
 }
 
 void MetalQueue::encode_direct(id<MTLCommandBuffer> cb, const PreparedSequence& sequence,

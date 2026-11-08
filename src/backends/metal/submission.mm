@@ -27,7 +27,11 @@ SubmitResult MetalQueue::submit(const std::vector<Command>& commands, DispatchPo
         completion->externally_managed = externally_managed();
         result.completion = completion;
         std::unique_lock<std::mutex> plan_lock;
-        auto plan = prepare_plan(commands, policy, std::move(cached), result.statistics, plan_lock);
+        const auto preparation_policy = options.timing && options.timing->options.sample_kernels
+                                            ? DispatchPolicy::Direct
+                                            : policy;
+        auto plan = prepare_plan(commands, preparation_policy, std::move(cached), result.statistics,
+                                 plan_lock);
         result.plan = plan;
         if (options.prepare_only) {
             ensure_scratch_capacity(*plan);
@@ -75,7 +79,11 @@ SubmitResult MetalQueue::submit(const std::vector<Command>& commands, DispatchPo
                     retain_until_complete(cb, use);
                     if (i == 0)
                         encode_waits(cb, options);
-                    encode_direct(cb, *plan->sequence, i, i + 1, use->scratch);
+                    if (options.timing && options.timing->options.sample_kernels)
+                        encode_profiled(cb, *plan->sequence, i, i + 1, use->scratch, *completion,
+                                        options.timing->options);
+                    else
+                        encode_direct(cb, *plan->sequence, i, i + 1, use->scratch);
                     if (i + 1 == commands.size())
                         encode_signal(cb, options);
                     if (!externally_managed())
@@ -87,7 +95,10 @@ SubmitResult MetalQueue::submit(const std::vector<Command>& commands, DispatchPo
                 completion->buffers.push_back({cb});
                 retain_until_complete(cb, use);
                 encode_waits(cb, options);
-                if (policy == DispatchPolicy::Indirect)
+                if (options.timing && options.timing->options.sample_kernels)
+                    encode_profiled(cb, *plan->sequence, 0, commands.size(), use->scratch,
+                                    *completion, options.timing->options);
+                else if (policy == DispatchPolicy::Indirect)
                     encode_indirect(cb, *plan, use->scratch);
                 else
                     encode_direct(cb, *plan->sequence, 0, commands.size(), use->scratch);

@@ -9,6 +9,16 @@ MetalDevice::MetalDevice(id<MTLDevice> device) : device_(device) {
     capabilities_.shared_memory = true;
     capabilities_.runtime_compilation = true;
     capabilities_.binary_archives = true;
+    if ([device_ supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) {
+        for (id<MTLCounterSet> set in device_.counterSets) {
+            if ([set.name isEqualToString:MTLCommonCounterSetTimestamp])
+                capabilities_.kernel_timestamps = true;
+            if ([set.name isEqualToString:MTLCommonCounterSetStatistic])
+                capabilities_.statistic_counters = true;
+            if ([set.name isEqualToString:MTLCommonCounterSetStageUtilization])
+                capabilities_.utilization_counters = true;
+        }
+    }
     capabilities_.max_threads_per_threadgroup = device_.maxThreadsPerThreadgroup.width;
     capabilities_.max_threadgroup_memory_bytes = device_.maxThreadgroupMemoryLength;
     // Feature-family queries describe the actual device; never infer a

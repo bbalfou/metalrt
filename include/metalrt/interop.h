@@ -21,6 +21,13 @@ Device import_metal_device(void* native_device);
 // The returned id<MTLDevice> is borrowed and remains valid while device is live.
 void* native_metal_device(Device device);
 
+// Retain an existing id<MTLComputePipelineState>. No source compilation occurs.
+// The optional second pipeline must support indirect command buffers and have
+// the same shader ABI. Without it only Direct and PerKernel are available.
+// Reflection is unavailable: the caller must supply all shader bindings correctly.
+Kernel import_metal_pipeline(Device device, void* direct_pipeline, const std::string& name,
+                             void* indirect_pipeline = nullptr);
+
 // Retain a whole tracked id<MTLBuffer>, without copying or changing its storage mode.
 // Use Buffer::view(byte_offset, byte_count) for tensor storage offsets. Shared
 // imports are registered for resolve_pointer(); Private imports remain usable

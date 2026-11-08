@@ -222,14 +222,20 @@ void timestamp_accounting() {
     check(result.valid() && result.command_buffers == 2, "valid timestamp count");
     check(result.command_buffer_seconds == 5 && result.span_seconds() == 4,
           "sum and span must preserve overlap");
+    check(result.occupied_seconds == 4, "overlap counted twice in occupied duration");
+    state.record(16, 18, true);
+    state.record(10.5, 11.5, true); // Nested and out-of-order intervals.
+    result = state.snapshot();
+    check(result.occupied_seconds == 6 && result.span_seconds() == 8,
+          "union lost gaps or double-counted nested intervals");
     state.record(0, 0, true);
     state.record(20, 19, true);
     state.record(20, std::numeric_limits<double>::infinity(), true);
     state.record(20, 21, false);
     result = state.snapshot();
-    check(!result.valid() && result.command_buffers == 6 && result.timed_command_buffers == 2,
+    check(!result.valid() && result.command_buffers == 8 && result.timed_command_buffers == 4,
           "missing/error timestamps must invalidate completeness");
-    check(result.command_buffer_seconds == 5,
+    check(result.command_buffer_seconds == 8,
           "invalid timestamps must not enter measured duration");
 }
 
@@ -305,6 +311,85 @@ void stream_windows(metalrt::Device device, metalrt::DispatchPolicy policy) {
     if (device.capabilities().backend == metalrt::BackendKind::Metal)
         check(replay.valid() && replay.command_buffers == 2, "prepared graph timing incorrect");
 }
+void kernel_samples(metalrt::Device device, metalrt::DispatchPolicy policy) {
+    using namespace metalrt;
+    Stream stream{device, policy};
+    GpuTimingOptions invalid;
+    invalid.counters = GpuCounterSet::Statistic;
+    rejects([&] { stream.begin_gpu_timing(invalid); }, "counters without sampling accepted");
+    invalid.counters = static_cast<GpuCounterSet>(999);
+    rejects([&] { stream.begin_gpu_timing(invalid); }, "unknown counter set accepted");
+    GpuTimingOptions options;
+    options.sample_kernels = true;
+    const auto caps = device.capabilities();
+    if (!caps.kernel_timestamps) {
+        rejects([&] { stream.begin_gpu_timing(options); }, "unsupported sampling accepted");
+        stream.begin_gpu_timing();
+        stream.end_gpu_timing(); // Failed request left no window.
+        return;
+    }
+    stream.begin_gpu_timing(options);
+    check(stream.end_gpu_timing().kernels.empty(), "empty window fabricated kernel samples");
+    auto kernel = device.kernel(
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "kernel void timed_kernel(device uint* p [[buffer(0)]], uint i [[thread_position_in_grid]])"
+        " { p[i] += 1; }",
+        "timed_kernel");
+    auto output = device.allocate(4096);
+    auto groups = device.allocate(3 * sizeof(uint32_t));
+    groups.data<uint32_t>()[0] = 16;
+    groups.data<uint32_t>()[1] = groups.data<uint32_t>()[2] = 1;
+    stream.fill(output.view(), 0);
+    stream.synchronize();
+    Graph graph;
+    {
+        auto record = graph.record_guard(&stream);
+        stream.dispatch(kernel, {1024, 1, 1}, {64, 1, 1},
+                        {Argument::buffer(0, output.view(), Access::ReadWrite)});
+        stream.dispatch_indirect(kernel, groups.view(), {16, 1, 1}, {64, 1, 1},
+                                 {Argument::buffer(0, output.view(), Access::ReadWrite)});
+        record.finish();
+    }
+    graph.prepare(&stream);
+    for (auto counters :
+         {GpuCounterSet::None, GpuCounterSet::Statistic, GpuCounterSet::StageUtilization}) {
+        options.counters = counters;
+        if ((counters == GpuCounterSet::Statistic && !caps.statistic_counters) ||
+            (counters == GpuCounterSet::StageUtilization && !caps.utilization_counters)) {
+            rejects([&] { stream.begin_gpu_timing(options); }, "unsupported counters accepted");
+            continue;
+        }
+        stream.begin_gpu_timing(options);
+        graph.launch(&stream).wait();
+        stream.last_ticket().wait();
+        graph.launch(&stream).wait();
+        const auto timing = stream.end_gpu_timing();
+        check(timing.valid() && timing.kernels.size() == 4, "lost or duplicated kernel samples");
+        check(timing.occupied_seconds > 0 &&
+                  timing.occupied_seconds <= timing.command_buffer_seconds,
+              "invalid occupied duration");
+        for (const auto& sample : timing.kernels) {
+            check(sample.kernel == "timed_kernel" && sample.valid && sample.seconds >= 0 &&
+                      sample.gpu_end >= sample.gpu_start,
+                  "invalid kernel timestamp sample");
+            check(sample.command_index < 2, "kernel sample lost its command index");
+            if (counters != GpuCounterSet::None) {
+                check(!sample.counters.empty(), "missing hardware counter results");
+                bool valid = false;
+                for (const auto& value : sample.counters)
+                    valid |= value.valid();
+                check(valid, "all hardware counters unavailable");
+            }
+        }
+    }
+    check(output.data<uint32_t>()[0] >= 4, "sampled dynamic/static dispatches failed");
+    // Sampling may replace an indirect plan with a direct one; ordinary replay
+    // must recover the requested policy and remain free of counter results.
+    stream.begin_gpu_timing();
+    graph.launch(&stream).wait();
+    const auto ordinary = stream.end_gpu_timing();
+    check(ordinary.valid() && ordinary.kernels.empty(), "ordinary replay inherited sampling state");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -332,6 +417,7 @@ int main(int argc, char** argv) {
                 !device.capabilities().indirect_compute)
                 continue;
             stream_windows(device, policy);
+            kernel_samples(device, policy);
         }
         std::cout << "PASS: completion timestamps, window isolation, overlap semantics, repeated "
                      "waits, graph replay and unavailable metrics\n";

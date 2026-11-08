@@ -79,9 +79,29 @@ endif()
 # These are ordinary asset copies. No script converts MSL source into C++ or
 # generates a kernel implementation. Source files remain human-editable .metal.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")
-foreach(shader dependent_kernels runtime_tests file_dispatch graph_features gpu_control ring_pipeline stable_parameters texture_sampling image_training)
+foreach(shader function_constants dependent_kernels runtime_tests file_dispatch graph_features gpu_control ring_pipeline stable_parameters texture_sampling image_training)
     configure_file("kernels/${shader}.metal" "shaders/${shader}.metal" COPYONLY)
 endforeach()
+
+# Offline fixture/example asset. Source-only consumers can build without Apple's
+# optional Metal compiler toolchain; loading existing metallibs remains available.
+if(METALRT_ENABLE_METAL AND (METALRT_BUILD_TESTS OR METALRT_BUILD_EXAMPLES))
+    execute_process(COMMAND xcrun --find metal OUTPUT_VARIABLE metalrt_metal_compiler
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE metalrt_metal_result)
+    if(metalrt_metal_result EQUAL 0)
+        set(metalrt_metallib "${CMAKE_CURRENT_BINARY_DIR}/shaders/function_constants.metallib")
+        add_custom_command(OUTPUT "${metalrt_metallib}"
+            COMMAND xcrun -sdk macosx metal -mmacosx-version-min=13.0 -c
+                "${CMAKE_CURRENT_SOURCE_DIR}/kernels/function_constants.metal"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/shaders/function_constants.air"
+            COMMAND xcrun -sdk macosx metallib "${CMAKE_CURRENT_BINARY_DIR}/shaders/function_constants.air"
+                -o "${metalrt_metallib}"
+            DEPENDS kernels/function_constants.metal VERBATIM)
+        add_custom_target(metalrt_example_metallib ALL DEPENDS "${metalrt_metallib}")
+    else()
+        message(STATUS "Metal compiler unavailable: skipping offline example/test asset")
+    endif()
+endif()
 
 if(METALRT_BUILD_TESTS)
     enable_testing()
@@ -90,6 +110,14 @@ if(METALRT_BUILD_TESTS)
     add_test(NAME reference_interop COMMAND test_interop)
     set_tests_properties(reference_interop PROPERTIES TIMEOUT 30 LABELS "runtime;reference;interop")
     if(METALRT_ENABLE_METAL)
+        add_executable(test_pipeline_import tests/test_pipeline_import.mm)
+        target_link_libraries(test_pipeline_import PRIVATE metalrt::metalrt)
+        target_compile_options(test_pipeline_import PRIVATE -fobjc-arc)
+        set_target_properties(test_pipeline_import PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED YES)
+        if(METALRT_TEST_METAL)
+            add_test(NAME metal_pipeline_import COMMAND test_pipeline_import)
+            set_tests_properties(metal_pipeline_import PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "runtime;metal;interop")
+        endif()
         add_executable(test_metal_interop tests/test_metal_interop.mm)
         target_link_libraries(test_metal_interop PRIVATE metalrt::metalrt)
         target_compile_options(test_metal_interop PRIVATE -fobjc-arc)
@@ -99,7 +127,7 @@ if(METALRT_BUILD_TESTS)
             set_tests_properties(metal_interop PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "runtime;metal;interop")
         endif()
     endif()
-    foreach(test runtime shader_file graph_features control ring scope_safety timing texture)
+    foreach(test kernel_features runtime shader_file graph_features control ring scope_safety timing texture)
         add_executable(test_${test} "tests/test_${test}.cpp")
         target_link_libraries(test_${test} PRIVATE metalrt::metalrt)
         target_compile_definitions(test_${test} PRIVATE
@@ -111,6 +139,14 @@ if(METALRT_BUILD_TESTS)
             set_tests_properties(metal_${test} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "runtime;metal")
         endif()
     endforeach()
+    if(metalrt_metallib)
+        add_dependencies(test_kernel_features metalrt_example_metallib)
+        target_compile_definitions(test_kernel_features PRIVATE METALRT_TEST_METALLIB="${metalrt_metallib}")
+        if(METALRT_TEST_METAL)
+            add_test(NAME metal_metallib_fresh_process COMMAND test_kernel_features --metallib-only)
+            set_tests_properties(metal_metallib_fresh_process PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "runtime;metal")
+        endif()
+    endif()
     target_sources(test_runtime PRIVATE
         tests/runtime/execution.cpp
         tests/runtime/recording.cpp
@@ -145,6 +181,10 @@ endif()
 
 if(METALRT_BUILD_EXAMPLES)
     if(METALRT_ENABLE_METAL)
+        add_executable(imported_pipeline examples/imported_pipeline.mm)
+        target_link_libraries(imported_pipeline PRIVATE metalrt::metalrt)
+        target_compile_options(imported_pipeline PRIVATE -fobjc-arc)
+        set_target_properties(imported_pipeline PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED YES)
         add_library(metalrt_example_image_io STATIC examples/image_io.mm)
         target_link_libraries(metalrt_example_image_io PUBLIC metalrt::metalrt "-framework ImageIO" "-framework CoreGraphics")
         target_compile_options(metalrt_example_image_io PRIVATE -fobjc-arc)
@@ -164,7 +204,7 @@ if(METALRT_BUILD_EXAMPLES)
             target_compile_definitions(image_training PRIVATE METALRT_EXAMPLE_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders")
         endif()
     endif()
-    foreach(example dependent_kernels replay_updates parallel_branches gpu_control stream_events overhead_benchmark ring_pipeline stable_parameters)
+    foreach(example specialized_kernels dependent_kernels replay_updates parallel_branches gpu_control stream_events overhead_benchmark ring_pipeline stable_parameters)
         add_executable(${example} "examples/${example}.cpp")
         target_link_libraries(${example} PRIVATE metalrt::metalrt)
         target_compile_definitions(${example} PRIVATE
@@ -180,6 +220,12 @@ if(METALRT_BUILD_EXAMPLES)
             set_tests_properties(example_${example}_reference PROPERTIES TIMEOUT 60 LABELS "runtime;reference;example")
         endif()
     endforeach()
+    if(metalrt_metallib AND METALRT_BUILD_TESTS AND METALRT_TEST_METAL)
+        add_test(NAME example_specialized_metallib COMMAND specialized_kernels --metallib "${metalrt_metallib}")
+        add_test(NAME example_imported_pipeline COMMAND imported_pipeline)
+        set_tests_properties(example_specialized_metallib example_imported_pipeline
+            PROPERTIES TIMEOUT 120 LABELS "runtime;metal;example")
+    endif()
     if(METALRT_BUILD_TESTS)
         add_test(NAME example_ring_double_per_slot_reference COMMAND ring_pipeline --reference --double --per-slot)
         set_tests_properties(example_ring_double_per_slot_reference PROPERTIES TIMEOUT 60 LABELS "runtime;reference;example")
@@ -191,6 +237,7 @@ install(TARGETS metalrt EXPORT metalrt-targets ARCHIVE DESTINATION ${CMAKE_INSTA
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/metalrt)
 install(FILES docs/compatibility.md DESTINATION ${CMAKE_INSTALL_DATADIR}/metalrt/docs)
+install(FILES docs/native-kernels.md DESTINATION ${CMAKE_INSTALL_DATADIR}/metalrt/docs)
 install(FILES docs/image-sampling.md DESTINATION ${CMAKE_INSTALL_DATADIR}/metalrt/docs)
 install(EXPORT metalrt-targets NAMESPACE metalrt:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/metalrt)
 configure_package_config_file(cmake/metalrt-config.cmake.in

@@ -80,6 +80,8 @@ struct EventState {
 struct TimingState {
     mutable std::mutex mutex;
     GpuTiming result;
+    GpuTimingOptions options;
+    std::vector<std::pair<double, double>> intervals;
     void record(double begin_seconds, double end_seconds, bool successful);
     GpuTiming snapshot() const;
 };
@@ -123,8 +125,8 @@ struct DeviceBackend : std::enable_shared_from_this<DeviceBackend> {
     virtual ~DeviceBackend() = default;
     virtual Capabilities capabilities() const = 0;
     virtual std::shared_ptr<BufferAllocation> allocate(size_t bytes, StorageMode storage) = 0;
-    virtual std::shared_ptr<TextureAllocation>
-    upload_texture(TextureDescriptor, const void*, size_t) {
+    virtual std::shared_ptr<TextureAllocation> upload_texture(TextureDescriptor, const void*,
+                                                              size_t) {
         throw std::runtime_error("texture upload is unavailable on this backend");
     }
     virtual std::shared_ptr<SamplerState> make_sampler(SamplerDescriptor) {
@@ -138,6 +140,16 @@ struct DeviceBackend : std::enable_shared_from_this<DeviceBackend> {
                                                         CpuKernel reference) {
         (void)cache_directory;
         return compile(source, entry, std::move(reference));
+    }
+    virtual std::shared_ptr<KernelState> load_metallib(const std::string&, const std::string& entry,
+                                                       const KernelCompileOptions&,
+                                                       CpuKernel reference) {
+        if (capabilities().backend != BackendKind::Reference)
+            throw std::runtime_error("precompiled libraries are unavailable on this backend");
+        return compile({}, entry, std::move(reference));
+    }
+    virtual std::shared_ptr<KernelState> import_metal_pipeline(void*, const std::string&, void*) {
+        throw std::runtime_error("Metal pipeline import is unavailable on this backend");
     }
     virtual void clear_kernel_cache() {}
     virtual std::shared_ptr<KernelState>

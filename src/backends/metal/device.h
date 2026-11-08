@@ -15,8 +15,8 @@ class MetalDevice final : public DeviceBackend {
                                                           std::shared_ptr<void> external_owner,
                                                           bool allow_untracked) override;
     std::shared_ptr<BufferAllocation> allocate(size_t bytes, StorageMode storage) override;
-    std::shared_ptr<TextureAllocation>
-    upload_texture(TextureDescriptor, const void*, size_t bytes_per_row) override;
+    std::shared_ptr<TextureAllocation> upload_texture(TextureDescriptor, const void*,
+                                                      size_t bytes_per_row) override;
     std::shared_ptr<SamplerState> make_sampler(SamplerDescriptor) override;
     std::shared_ptr<KernelState> compile(const std::string& source, const std::string& entry,
                                          CpuKernel reference) override;
@@ -28,6 +28,9 @@ class MetalDevice final : public DeviceBackend {
                                                              const std::string& cache_directory,
                                                              const KernelCompileOptions& options,
                                                              CpuKernel reference) override;
+    std::shared_ptr<KernelState> load_metallib(const std::string&, const std::string&,
+                                               const KernelCompileOptions&, CpuKernel) override;
+    std::shared_ptr<KernelState> import_metal_pipeline(void*, const std::string&, void*) override;
     void clear_kernel_cache() override;
     std::unique_ptr<QueueBackend> make_queue() override;
     std::unique_ptr<QueueBackend>
@@ -50,7 +53,11 @@ class MetalDevice final : public DeviceBackend {
                                                 MTLComputePipelineReflection** reflection);
     void archive_kernel_locked(const MetalKernel& kernel, NativeArchive& archive);
     bool store_archive_locked(NativeArchive& archive);
-    id<MTLLibrary> library_locked(const std::string& source, bool fast_math = false);
+    std::shared_ptr<KernelState> compile_impl(const std::string&, const std::string&,
+                                              const std::string&, const KernelCompileOptions&,
+                                              CpuKernel, bool precompiled);
+    id<MTLLibrary> library_locked(const std::string& source, bool fast_math = false,
+                                  bool precompiled = false);
 };
 } // namespace metal
 } // namespace detail
